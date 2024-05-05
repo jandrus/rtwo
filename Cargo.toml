@@ -9,6 +9,7 @@ categories = ["command-line-utilities"]
 readme = "README.md"
 homepage = "https://github.com/jandrus/"
 repository = "https://github.com/jandrus/"
+exclude = ["demo"]
 
 [lib]
 name = "lib"
