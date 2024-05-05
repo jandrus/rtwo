@@ -17,7 +17,7 @@ _________
 
 ## Demo
 
-<!-- ![Demo](/mnt/glados/Programming/Rust/rtwo/demo/demo.gif) -->
+<img src="https://github.com/jandrus/rtwo/blob/main/demo/demo.gif?raw=true">
 
 _________
 
