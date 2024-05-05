@@ -28,7 +28,11 @@ _________
 You can download the pre-built binaries from the [release page](https://github.com/jandrus/rtwo/releases)
 
 ### crates.io
+`rtwo` can be installed from [crates.io](https://crates.io/crates/rtwo)
 
+```shell
+cargo install rtwo
+```
 
 ### Build from source
 
