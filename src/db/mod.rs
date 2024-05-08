@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Local};
 use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect, Select};
 use rusqlite::Connection;
@@ -61,7 +61,14 @@ pub fn restore_conversation(conf: &lib::RTwoConfig) -> Result<(Option<String>, V
             .report(false)
             .interact()?,
     };
-    lib::fmt_print("* Restoring conversation *", lib::ContentType::Info, conf);
+    lib::fmt_print(
+        &format!(
+            "* Restoring conversation *\n{}",
+            get_time_from_ts(entries[idx].timestamp)?
+        ),
+        lib::ContentType::Info,
+        conf,
+    );
     for chat in &entries[idx].conversation {
         match chat.role.as_str() {
             "user" => {
@@ -158,13 +165,11 @@ fn get_conversation_entries() -> Result<(Vec<DBEntry>, Vec<String>)> {
     let mut conversations: Vec<String> = vec![];
     for row in rows {
         let entry = row?.clone();
-        let ts: DateTime<Local> = DateTime::from_timestamp_millis(entry.timestamp as i64)
-            .unwrap()
-            .into();
+        let ts = get_time_from_ts(entry.timestamp)?;
         let len_context = entry.context.matches(',').collect::<Vec<&str>>().len() + 1;
         conversations.push(format!(
             "{}: {}@{} -> {:.32} [{} context len]",
-            ts.format("%Y-%m-%d %H%M"),
+            ts,
             entry.model,
             entry.host,
             entry.conversation.first().unwrap().content,
@@ -176,4 +181,11 @@ fn get_conversation_entries() -> Result<(Vec<DBEntry>, Vec<String>)> {
         bail!("No responses saved");
     }
     Ok((entries, conversations))
+}
+
+fn get_time_from_ts(ts: u64) -> Result<String> {
+    if let Some(time_obj) = DateTime::from_timestamp_millis(ts as i64) {
+        return Ok(time_obj.format("%Y-%m-%d %H%M").to_string());
+    };
+    Err(anyhow!("Error parsing timestamp"))
 }

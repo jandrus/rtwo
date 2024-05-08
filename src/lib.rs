@@ -221,8 +221,6 @@ pub fn get_project_file(file: ProjFiles) -> Result<String> {
 fn read_file(path: &str) -> Result<String> {
     let mut s = String::new();
     let mut f = File::open(path)?;
-    match f.read_to_string(&mut s) {
-        Ok(_) => Ok(s),
-        Err(e) => Err(anyhow!(e.to_string())),
-    }
+    f.read_to_string(&mut s)?;
+    Ok(s)
 }

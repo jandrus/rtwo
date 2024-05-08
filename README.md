@@ -167,7 +167,7 @@ _________
 _________
 
 ## Donate
-- **BTC**: `bc1q7y20wr2n5qt2fxe569llvz5a0qsnpsz4decplr`
+- **BTC**: `bc1qvx8q2xxwesw22yvrftff89e79yh86s56y2p9x9`
 - **XMR**: `84t9GUWQVJSGxF8cbMtRBd67YDAHnTsrdWVStcdpiwcAcAnVy21U6RmLdwiQdbfsyu16UqZn6qj1gGheTMkHkYA4HbVN4zS`
 
 _________
