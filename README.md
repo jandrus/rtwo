@@ -60,11 +60,10 @@ The default configuration is:
 ``` toml
 host = "localhost"
 port = 11434
-model = "llama3"
+model = "llama3:70b"
 verbose = false
 color = true
 save = true
-stream = false
 ```
 
 - host:    target host for ollama server
@@ -73,8 +72,6 @@ stream = false
 - verbose: enable/disable verbose output from responses (See Usage)
 - color:   enable/disable color output from responses
 - save:    enable/disable saving responses to DB (`$HOME/.local/share/rtwo/rtwo.db`)
-- stream:  enable/disable streaming response to terminal
-  - NOTE: `false` is the recommended value. Setting this to true disables markdown output formatting. However, for slower ollama servers or larger models, it may be advantageous to set this value to `true`.
 
 _________
 
@@ -82,63 +79,34 @@ _________
 ``` shell
   -H, --host <HOST>
           Host address for ollama server. e.g.: localhost, 192.168.1.5, etc.
-          Can be set in configuration file.
-          Default: localhost
 
   -p, --port <PORT>
           Host port for ollama server. e.g.: 11434, 1776, etc.
-          Can be set in configuration file.
-          Default: 11434
 
   -m, --model <MODEL>
           Model name to query. e.g.: mistral, llama3:70b, etc.
-          NOTE: If model is not available on HOST, rtwo will not automatically download the model to the HOST. Use "pull" [-P, --pull] to download the model to the HOST.
-          Can be set in configuration file.
-          Default: llama3
+          NOTE: If model is not available on HOST, rtwo will not automatically download the model to the HOST. Use
+          "pull" [-P, --pull] to download the model to the HOST.
 
   -v, --verbose
-          Enable verbose output. Prints: model, tokens in prompt, tokens in response, and time taken after response is rendered to user.
+          Enable verbose output. Prints: model, tokens in prompt, tokens in response, and time taken after response
+          is rendered to user.
           Example:
           	* Model: llama3:70b
           	* Tokens in prompt: 23
           	* Tokens in response: 216
           	* Time taken: 27.174
-          Can be set in configuration file.
-          Default: false
 
   -c, --color
           Enable color output.
-          Can be set in configuration file.
-          Default: true
-
-  -n, --nocolor
-          Disable color output.
-          Can be set in configuration file [color = false].
 
   -s, --save
           Save conversation for recall (places conversation in DB)
-          Can be set in configuration file.
-          Default: true
-
-  -i, --incogneto
-          Do NOT save conversation for recall.
-          Can be set in configuration file [save = false].
-
-  -b, --batch
-          Do not stream llm output (wait for full response to generate before rendering to user).
-          NOTE: This allows response formatting.
-          Can be set in configuration file [stream = false].
-
-  -S, --stream
-          Stream llm output (Display response as it is rendered by host)
-          NOTE: This disables response formatting.
-          Can be set in configuration file.
-          Default: false
 
   -l, --list
           List previous conversations
 
-  -L, --listmodel
+  -L, --listmodels
           List available models on ollama server (HOST:PORT)
 
   -r, --restore
@@ -154,7 +122,7 @@ _________
   -P, --pull <MODEL>
           Pull model to ollama server for use (downloads model on HOST). e.g.: llama3.
 
-  -D, --delete-model <MODEL>
+  -D, --delmodel <MODEL>
           Delete model from ollama server (deletes model on HOST). e.g.: llama2.
 
   -h, --help
