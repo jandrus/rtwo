@@ -1,16 +1,14 @@
 use std::process;
 
 use clap::{Arg, ArgMatches, Command};
-use dialoguer::{theme::ColorfulTheme, Confirm, Input};
 
 mod db;
 mod ollama;
 
-#[tokio::main]
-async fn main() {
+fn main() {
     // Setup Directories -> config, data
     if let Err(e) = lib::setup_file_struct() {
-        println!("{}", e);
+        eprintln!("Error setting up file structure: {}", e);
         process::exit(1);
     }
     // Args
@@ -21,53 +19,42 @@ async fn main() {
         Err(e) => {
             let err_msg = format!("Failed to read config from file or args -> {}", e);
             lib::log(lib::LogLevel::Error, "main", &err_msg).unwrap();
-            println!("{}", err_msg);
+            eprintln!("{}", err_msg);
             process::exit(1);
         }
     };
+    // Is ollama server in config/args up?
+    if ollama::valid_server(&conf).is_err() {
+        kill("Invalid server".to_owned(), "ollama", conf.color);
+    }
     // Models on ollama host
-    let avail_models: Vec<String> = match ollama::get_models(&conf).await {
+    let avail_models: Vec<String> = match ollama::get_models(&conf) {
         Ok(m) => m,
         Err(e) => {
             let err_msg = format!(
                 "Failed to get available models from {}:{} -> {}",
                 conf.host, conf.port, e
             );
-            lib::log(lib::LogLevel::Error, "ollama", &err_msg).unwrap();
-            lib::fmt_print(&err_msg, lib::ContentType::Error, &conf);
-            process::exit(1);
+            kill(err_msg, "ollama", conf.color);
         }
     };
     if matches.get_flag("list_models") {
         lib::fmt_print(
             &format!("Available models: {:?}", avail_models),
             lib::ContentType::Info,
-            &conf,
+            conf.color,
         );
         lib::fmt_print(
             &format!("Selected model: \"{}\"", &conf.model),
             lib::ContentType::Info,
-            &conf,
+            conf.color,
         );
-    }
-    // Ensure model in config is on ollama host
-    if !avail_models.iter().any(|m| m.contains(&conf.model)) {
-        let err_str = format!(
-            "Model \"{}\" not available.\nAvailable models for {} include: {:?}",
-            &conf.model, &conf.host, avail_models
-        );
-        lib::fmt_print(&err_str, lib::ContentType::Error, &conf);
-        let err_msg = format!(
-            "Provided model not available at {}:{}",
-            conf.host, conf.port
-        );
-        lib::log(lib::LogLevel::Error, "ollama", &err_msg).unwrap();
-        process::exit(1);
+        process::exit(0);
     }
     // Pull provided model to ollama host
     if matches.value_source("pull").is_some() {
         let model = matches.get_one::<String>("pull").unwrap().to_string();
-        match ollama::pull_model(model.clone(), avail_models, &conf).await {
+        match ollama::pull_model(model.clone(), avail_models, &conf) {
             Ok(_) => {
                 let msg = format!("Model \"{}\" pulled to {}:{}", &model, conf.host, conf.port);
                 lib::log(lib::LogLevel::Info, "ollama", &msg).unwrap();
@@ -78,23 +65,21 @@ async fn main() {
                     "Failed to pull model \"{}\" to {}:{} -> {}",
                     &model, conf.host, conf.port, e
                 );
-                lib::log(lib::LogLevel::Error, "ollama", &err_msg).unwrap();
-                lib::fmt_print(&err_msg, lib::ContentType::Error, &conf);
-                process::exit(1);
+                kill(err_msg, "ollama", conf.color);
             }
         }
     }
     // Delete provided model on ollama host
     if matches.value_source("del").is_some() {
         let model = matches.get_one::<String>("del").unwrap().to_string();
-        match ollama::del_model(model.clone(), avail_models, &conf).await {
+        match ollama::del_model(model.clone(), avail_models, &conf) {
             Ok(_) => {
                 let msg = format!(
                     "Model \"{}\" deleted from {}:{}",
                     &model, conf.host, conf.port
                 );
                 lib::log(lib::LogLevel::Info, "ollama", &msg).unwrap();
-                lib::fmt_print(&msg, lib::ContentType::Exit, &conf);
+                lib::fmt_print(&msg, lib::ContentType::Exit, conf.color);
                 process::exit(0);
             }
             Err(e) => {
@@ -102,64 +87,51 @@ async fn main() {
                     "Failed to delete model \"{}\" from {}:{} -> {}",
                     &model, conf.host, conf.port, e
                 );
-                lib::log(lib::LogLevel::Error, "ollama", &err_msg).unwrap();
-                lib::fmt_print(&err_msg, lib::ContentType::Error, &conf);
-                process::exit(1);
+                kill(err_msg, "ollama", conf.color);
             }
         }
     }
+    // Ensure model in config is on ollama host
+    if !avail_models.iter().any(|m| m.contains(&conf.model)) {
+        let err_msg = format!(
+            "Model \"{}\" not available.\nAvailable models for {} include: {:?}",
+            &conf.model, &conf.host, avail_models
+        );
+        kill(err_msg, "ollama", conf.color);
+    }
     // List saved conversations
-    if matches.get_flag("list") {
-        if let Err(e) = db::list_conversations(&conf) {
-            lib::fmt_print(
-                "Failed to list conversations. See log for details",
-                lib::ContentType::Error,
-                &conf,
-            );
-            lib::log(lib::LogLevel::Error, "db", &e.to_string()).unwrap();
-            process::exit(1);
-        }
+    if matches.get_flag("list") && db::list_conversations(conf.color).is_err() {
+        kill("Failed to list conversations".to_owned(), "db", conf.color);
     }
     // Delete saved conversations
-    if matches.get_flag("del_convo") {
-        if let Err(e) = db::delete_conversations(&conf) {
-            lib::fmt_print(
-                "Failed to delete conversations. See log for details",
-                lib::ContentType::Error,
-                &conf,
-            );
-            lib::log(lib::LogLevel::Error, "db", &e.to_string()).unwrap();
-            process::exit(1);
-        }
+    if matches.get_flag("del_convo") && db::delete_conversations(conf.color).is_err() {
+        kill("Failed to delete conversation".to_owned(), "db", conf.color);
     }
     let mut conversation: Vec<db::Chat> = vec![];
     let mut context: Option<String> = None;
     // Restore conversation
     if matches.get_flag("restore") {
-        (context, conversation) = match db::restore_conversation(&conf) {
+        (context, conversation) = match db::restore_conversation(conf.color) {
             Ok((ctx, convo)) => (ctx, convo),
             Err(e) => {
                 let err_msg = format!("Failed to restore conversation -> {}", e);
-                lib::log(lib::LogLevel::Error, "main", &err_msg).unwrap();
-                lib::fmt_print(&err_msg, lib::ContentType::Error, &conf);
-                process::exit(1);
+                kill(err_msg, "db", conf.color);
             }
         }
     }
     // Main loop (Q&A)
     loop {
-        let question: String = match conf.color {
-            true => Input::with_theme(&ColorfulTheme::default())
-                .with_prompt("Ask R2")
-                .interact_text()
-                .unwrap(),
-            false => Input::new().with_prompt("Ask R2").interact_text().unwrap(),
+        let prompt: String = match lib::get_input("Ask R2", None, conf.color) {
+            Ok(s) => s,
+            Err(_) => {
+                kill("Failed to get user input".to_owned(), "main", conf.color);
+            }
         };
         conversation.push(db::Chat {
             role: "user".to_string(),
-            content: question.clone(),
+            content: prompt.clone(),
         });
-        context = match ollama::generate(question.replace('\"', "'"), context, &conf).await {
+        context = match ollama::gen(prompt.replace('\"', "'"), context, &conf) {
             Ok((ctx, resp)) => {
                 conversation.push(db::Chat {
                     role: "assistant".to_string(),
@@ -172,39 +144,39 @@ async fn main() {
                     "Failed to generate response from {}:{} -> {}",
                     conf.host, conf.port, e
                 );
-                lib::log(lib::LogLevel::Error, "ollama", &err_msg).unwrap();
-                lib::fmt_print(&err_msg, lib::ContentType::Error, &conf);
-                process::exit(1);
+                kill(err_msg, "ollama", conf.color);
             }
         };
-        let ask_again = match conf.color {
-            true => Confirm::with_theme(&ColorfulTheme::default())
-                .with_prompt("Ask another question?")
-                .wait_for_newline(true)
-                .interact()
-                .unwrap(),
-            false => Confirm::new()
-                .with_prompt("Ask another question?")
-                .wait_for_newline(true)
-                .interact()
-                .unwrap(),
+        let ask_again = match lib::get_confirm("Ask another question?", None, conf.color) {
+            Ok(b) => b,
+            Err(_) => {
+                kill(
+                    "Failed to get user confirmation".to_owned(),
+                    "main",
+                    conf.color,
+                );
+            }
         };
         if !ask_again {
             break;
         }
     }
-    if conf.save {
+    if conf.save || lib::get_confirm("Save conversation?", None, conf.color).unwrap() {
         if let Err(e) = db::save_conversation(conversation, context, &conf) {
             let err_msg = format!(
                 "\nFailed to save conversation {}:{} -> {}",
                 conf.host, conf.port, e
             );
-            lib::log(lib::LogLevel::Error, "db", &err_msg).unwrap();
-            lib::fmt_print(&err_msg, lib::ContentType::Error, &conf);
-            process::exit(1);
+            kill(err_msg, "db", conf.color);
         }
     }
-    lib::fmt_print("Goodbye", lib::ContentType::Exit, &conf);
+    lib::fmt_print("Goodbye", lib::ContentType::Exit, conf.color);
+}
+
+fn kill(msg: String, descriptor: &str, color: bool) -> ! {
+    lib::log(lib::LogLevel::Error, descriptor, &msg).unwrap();
+    lib::fmt_print(&msg, lib::ContentType::Error, color);
+    process::exit(1)
 }
 
 fn get_matches() -> ArgMatches {
@@ -218,7 +190,7 @@ fn get_matches() -> ArgMatches {
                 .short('H')
                 .long("host")
                 .help("Host address for ollama server")
-                .long_help("Host address for ollama server. e.g.: localhost, 192.168.1.5, etc.\nCan be set in configuration file.\nDefault: localhost")
+                .long_help("Host address for ollama server. e.g.: localhost, 192.168.1.5, etc.")
                 .value_name("HOST")
                 .required(false)
                 .action(clap::ArgAction::Set)
@@ -229,7 +201,7 @@ fn get_matches() -> ArgMatches {
                 .short('p')
                 .long("port")
                 .help("Host port for ollama server")
-                .long_help("Host port for ollama server. e.g.: 11434, 1776, etc.\nCan be set in configuration file.\nDefault: 11434")
+                .long_help("Host port for ollama server. e.g.: 11434, 1776, etc.")
                 .value_name("PORT")
                 .required(false)
                 .action(clap::ArgAction::Set)
@@ -240,7 +212,7 @@ fn get_matches() -> ArgMatches {
                 .short('m')
                 .long("model")
                 .help("Model name to query. eg: llama3")
-                .long_help("Model name to query. e.g.: mistral, llama3:70b, etc.\nNOTE: If model is not available on HOST, rtwo will not automatically download the model to the HOST. Use \"pull\" [-P, --pull] to download the model to the HOST.\nCan be set in configuration file.\nDefault: llama3")
+                .long_help("Model name to query. e.g.: mistral, llama3:70b, etc.\nNOTE: If model is not available on HOST, rtwo will not automatically download the model to the HOST. Use \"pull\" [-P, --pull] to download the model to the HOST.")
                 .value_name("MODEL")
                 .required(false)
                 .action(clap::ArgAction::Set)
@@ -251,7 +223,7 @@ fn get_matches() -> ArgMatches {
                 .short('v')
                 .long("verbose")
                 .help("Enable verbose output")
-                .long_help("Enable verbose output. Prints: model, tokens in prompt, tokens in response, and time taken after response is rendered to user.\nExample: \n\t* Model: llama3:70b\n\t* Tokens in prompt: 23\n\t* Tokens in response: 216\n\t* Time taken: 27.174\nCan be set in configuration file.\nDefault: false")
+                .long_help("Enable verbose output. Prints: model, tokens in prompt, tokens in response, and time taken after response is rendered to user.\nExample: \n\t* Model: llama3:70b\n\t* Tokens in prompt: 23\n\t* Tokens in response: 216\n\t* Time taken: 27.174")
                 .required(false)
                 .action(clap::ArgAction::SetTrue),
         )
@@ -259,19 +231,8 @@ fn get_matches() -> ArgMatches {
             Arg::new("color")
                 .short('c')
                 .long("color")
-                .conflicts_with("no_color")
                 .help("Enable color output")
-                .long_help("Enable color output.\nCan be set in configuration file.\nDefault: true")
-                .required(false)
-                .action(clap::ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("no_color")
-                .short('n')
-                .long("nocolor")
-                .conflicts_with("color")
-                .help("Disable color output")
-                .long_help("Disable color output.\nCan be set in configuration file [color = false].")
+                .long_help("Enable color output.")
                 .required(false)
                 .action(clap::ArgAction::SetTrue),
         )
@@ -279,39 +240,8 @@ fn get_matches() -> ArgMatches {
             Arg::new("save")
                 .short('s')
                 .long("save")
-                .conflicts_with("no_save")
                 .help("Save conversation for recall (places conversation in DB)")
-                .long_help("Save conversation for recall (places conversation in DB)\nCan be set in configuration file.\nDefault: true")
-                .required(false)
-                .action(clap::ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("no_save")
-                .short('i')
-                .long("incogneto")
-                .conflicts_with("save")
-                .help("Do NOT save conversation for recall.")
-                .long_help("Do NOT save conversation for recall.\nCan be set in configuration file [save = false].")
-                .required(false)
-                .action(clap::ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("batch")
-                .short('b')
-                .long("batch")
-                .conflicts_with("stream")
-                .help("Do not stream llm output (Enables response formatting)")
-                .long_help("Do not stream llm output (wait for full response to generate before rendering to user).\nNOTE: This allows response formatting.\nCan be set in configuration file [stream = false].")
-                .required(false)
-                .action(clap::ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("stream")
-                .short('S')
-                .long("stream")
-                .conflicts_with("batch")
-                .help("Stream llm output (Disables response formatting).")
-                .long_help("Stream llm output (Display response as it is rendered by host)\nNOTE: This disables response formatting.\nCan be set in configuration file.\nDefault: false")
+                .long_help("Save conversation for recall (places conversation in DB)")
                 .required(false)
                 .action(clap::ArgAction::SetTrue),
         )
@@ -330,7 +260,7 @@ fn get_matches() -> ArgMatches {
         .arg(
             Arg::new("list_models")
                 .short('L')
-                .long("listmodel")
+                .long("listmodels")
                 .help("List available models on ollama server (HOST:PORT)")
                 .required(false)
                 .action(clap::ArgAction::SetTrue),
@@ -379,7 +309,7 @@ fn get_matches() -> ArgMatches {
         .arg(
             Arg::new("del")
                 .short('D')
-                .long("delete-model")
+                .long("delmodel")
                 .conflicts_with("list")
                 .conflicts_with("del_convo")
                 .conflicts_with("pull")

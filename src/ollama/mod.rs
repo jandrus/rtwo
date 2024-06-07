@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::str;
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::StatusCode;
 use serde_derive::Deserialize;
 
 const SPINNER: &[&str] = &["▹▹▹▹▹", "▸▹▹▹▹", "▹▸▹▹▹", "▹▹▸▹▹", "▹▹▹▸▹", "▹▹▹▹▸", "✔"];
+const SPINNER_ERR: &[&str] = &["✘"];
 
 #[derive(Deserialize)]
 pub struct GenerateResponse {
@@ -52,18 +53,17 @@ pub struct Details {
 pub struct PullResponse {
     pub error: Option<String>,
     pub status: Option<String>,
-    pub digest: Option<String>,
-    pub total: Option<usize>,
-    pub completed: Option<usize>,
 }
 
-pub async fn del_model(
-    name: String,
-    avail_models: Vec<String>,
-    conf: &lib::RTwoConfig,
-) -> Result<()> {
+pub fn valid_server(conf: &lib::Config) -> Result<()> {
+    let full_url = format!("http://{}:{}", conf.host, conf.port);
+    let _ = reqwest::blocking::get(full_url)?;
+    Ok(())
+}
+
+pub fn del_model(name: String, avail_models: Vec<String>, conf: &lib::Config) -> Result<()> {
     let del_msg = format!("Attempting to delete model \"{}\"", &name);
-    lib::fmt_print(&del_msg, lib::ContentType::Exit, conf);
+    lib::fmt_print(&del_msg, lib::ContentType::Exit, conf.color);
     if !avail_models.contains(&name) {
         bail!("Model not found");
     }
@@ -76,74 +76,53 @@ pub async fn del_model(
     let mut payload: HashMap<String, String> = HashMap::new();
     payload.insert("name".to_string(), name.clone());
     let body = get_postdata(payload);
-    let client = reqwest::Client::builder().build()?;
-    let resp = client.delete(full_url).body(body).send().await?;
+    let client = reqwest::blocking::Client::new();
+    let resp = client.delete(full_url).body(body).send()?;
     if resp.status() != StatusCode::OK {
         bail!("Server error deleting model");
     }
     Ok(())
 }
 
-pub async fn pull_model(
-    name: String,
-    avail_models: Vec<String>,
-    conf: &lib::RTwoConfig,
-) -> Result<()> {
+pub fn pull_model(name: String, avail_models: Vec<String>, conf: &lib::Config) -> Result<()> {
     let msg = format!(
         "Attempting to pull model \"{}\" to {}:{}",
         &name, conf.host, conf.port
     );
     lib::log(lib::LogLevel::Debug, "ollama", &msg)?;
     if avail_models.contains(&name) {
-        lib::fmt_print("Model already exists on server", lib::ContentType::Exit, conf);
+        lib::fmt_print(
+            "Model already exists on server",
+            lib::ContentType::Exit,
+            conf.color,
+        );
         return Ok(());
     }
     let full_url = format!("http://{}:{}/api/pull", conf.host, conf.port);
     let mut payload: HashMap<String, String> = HashMap::new();
     payload.insert("name".to_string(), name.clone());
+    payload.insert("stream".to_string(), "false".to_string());
     let body = get_postdata(payload);
-    let client = reqwest::Client::builder().build()?;
-    let mut resp = client.post(full_url).body(body).send().await?;
+    let client = reqwest::blocking::Client::builder().timeout(None).build()?;
     let pb = start_spinner(conf.color);
-    let mut layers: Vec<String> = vec![];
-    let mut layer_num = 0;
-    let dl_msg = format!("Downloading \"{}\"", &name);
-    lib::fmt_print(&dl_msg, lib::ContentType::Exit, conf);
-    pb.set_message(dl_msg);
-    while let Some(chunk) = resp.chunk().await? {
-        let raw_resp: &str = str::from_utf8(&chunk)?;
-        let o_resp: PullResponse = serde_json::from_str(raw_resp)?;
-        if let Some(e) = o_resp.error {
-            pb.finish_with_message("Error");
-            bail!(e);
-        }
-        if let Some(status) = o_resp.status {
-            if layers.contains(&status) {
-                continue;
-            }
-            match o_resp.digest {
-                Some(_) => {
-                    layers.push(status.clone());
-                    layer_num += 1;
-                    let msg = format!("Downloading: Layer {}", layer_num);
-                    pb.set_message(msg);
-                    continue;
-                }
-                None => pb.set_message(status.clone()),
-            }
-            if &status == "success" {
-                pb.finish_with_message("Done");
-            }
-        }
+    pb.set_message(format!("Downloading \"{}\"", &name));
+    let resp = client.post(full_url).body(body).send()?;
+    let ollama_resp: PullResponse = serde_json::from_str(&resp.text()?)?;
+    if let Some(err) = ollama_resp.error {
+        finish_spinner_error(pb, conf.color);
+        bail!(err);
     }
-    Ok(())
+    if let Some(status) = ollama_resp.status {
+        if status == "success" {
+            pb.finish_with_message("Done");
+            return Ok(());
+        }
+        pb.finish_with_message("Error");
+    }
+    Err(anyhow!("Error downloading model"))
 }
 
-pub async fn generate(
-    question: String,
-    context: Option<String>,
-    conf: &lib::RTwoConfig,
-) -> Result<(String, String)> {
+pub fn gen(prompt: String, ctx: Option<String>, conf: &lib::Config) -> Result<(String, String)> {
     let msg = format!(
         "Attempting to generate response from {}:{}",
         conf.host, conf.port
@@ -152,58 +131,61 @@ pub async fn generate(
     let full_url = format!("http://{}:{}/api/generate", conf.host, conf.port);
     let mut payload: HashMap<String, String> = HashMap::new();
     payload.insert("model".to_string(), conf.model.to_string());
-    payload.insert("prompt".to_string(), question);
-    if !conf.stream {
-        payload.insert("stream".to_string(), "false".to_string());
-    }
-    if let Some(ctx) = context {
-        payload.insert("context".to_string(), ctx);
+    payload.insert("prompt".to_string(), prompt);
+    payload.insert("stream".to_string(), "false".to_string());
+    if let Some(context) = ctx {
+        payload.insert("context".to_string(), context);
     }
     let body = get_postdata(payload);
-    let client = reqwest::Client::builder().build()?;
-    let mut context = "[]".to_string();
-    let mut full_response = String::new();
-    if conf.stream {
-        let mut raw_resp = String::new();
-        let mut resp = client.post(full_url).body(body).send().await?;
-        while let Some(chunk) = resp.chunk().await? {
-            // tmp variable used because large responses (final resp) may sometimes be split amongst multiple chunks
-            let tmp: &str = str::from_utf8(&chunk)?.trim_end();
-            raw_resp.push_str(tmp);
-            if !raw_resp.ends_with('}') {
-                continue;
-            }
-            let ollama_resp: GenerateResponse = serde_json::from_str(&raw_resp)?;
-            raw_resp = String::new();
-            let (ctx_opt, response) = process_gen_response(ollama_resp, conf)?;
-            full_response.push_str(&response);
-            if let Some(ctx) = ctx_opt {
-                context = ctx;
-            }
-        }
-    } else {
-        let pb = start_spinner(conf.color);
-        pb.set_message("Processing");
-        let resp = client.post(full_url).body(body).send().await?;
-        let ollama_resp: GenerateResponse = serde_json::from_str(&resp.text().await?)?;
-        pb.finish_and_clear();
-        let (ctx_opt, response) = process_gen_response(ollama_resp, conf)?;
-        full_response.push_str(&response);
-        if let Some(ctx) = ctx_opt {
-            context = ctx;
-        }
+    let client = reqwest::blocking::Client::builder().timeout(None).build()?;
+    let pb = start_spinner(conf.color);
+    pb.set_message("Processing");
+    let resp = client.post(full_url).body(body).send()?;
+    let ollama_resp: GenerateResponse = serde_json::from_str(&resp.text()?)?;
+    if let Some(err) = ollama_resp.error {
+        finish_spinner_error(pb, conf.color);
+        bail!(err);
     }
-    Ok((context, full_response))
+    pb.finish_with_message("Done");
+    let response = match ollama_resp.response {
+        Some(s) => {
+            lib::fmt_print(&s, lib::ContentType::Answer, conf.color);
+            s
+        }
+        None => bail!("Response not found"),
+    };
+    let context = match ollama_resp.context {
+        Some(s) => format!("{:?}", s),
+        None => bail!("Context not found"),
+    };
+    if conf.verbose {
+        let model = ollama_resp.model.unwrap_or("Unknown".to_string());
+        let prompt_eval_count = ollama_resp.prompt_eval_count.unwrap_or(0);
+        let eval_count = ollama_resp.eval_count.unwrap_or(0);
+        let total_duration: f64 = ollama_resp.total_duration.unwrap_or(0) as f64 / 1000000000.0;
+        let msg = format!(
+            "Response generated from {}:{} -> [\"{}\",{},{},{}]",
+            conf.host, conf.port, model, prompt_eval_count, eval_count, total_duration
+        );
+        lib::log(lib::LogLevel::Debug, "ollama", &msg)?;
+        lib::fmt_print("\nDone", lib::ContentType::Info, conf.color);
+        let info = format!(
+            "* Model: {}\n* Tokens in prompt: {}\n* Tokens in response: {}\n* Time taken: {:.3}s",
+            model, prompt_eval_count, eval_count, total_duration
+        );
+        lib::fmt_print(&info, lib::ContentType::Info, conf.color);
+    }
+    Ok((context, response))
 }
 
-pub async fn get_models(conf: &lib::RTwoConfig) -> Result<Vec<String>> {
+pub fn get_models(conf: &lib::Config) -> Result<Vec<String>> {
     let msg = format!(
         "Attempting to get available models from {}:{}",
         conf.host, conf.port
     );
     lib::log(lib::LogLevel::Debug, "ollama", &msg)?;
     let full_url = format!("http://{}:{}/api/tags", conf.host, conf.port);
-    let resp: ModelResponse = reqwest::get(full_url).await?.json().await?;
+    let resp: ModelResponse = reqwest::blocking::get(full_url)?.json()?;
     let models = resp.models.into_iter().map(|m| m.name).collect();
     let msg = format!(
         "Available models at {}:{} : {:?}",
@@ -232,42 +214,21 @@ fn start_spinner(color: bool) -> ProgressBar {
     pb
 }
 
-fn process_gen_response(
-    ollama_resp: GenerateResponse,
-    conf: &lib::RTwoConfig,
-) -> Result<(Option<String>, String)> {
-    if let Some(err) = ollama_resp.error {
-        bail!(err);
-    }
-    let mut context: Option<String> = None;
-    let response = match ollama_resp.response {
-        Some(s) => {
-            lib::fmt_print(&s, lib::ContentType::Answer, conf);
-            s
-        }
-        None => bail!("Response not found"),
-    };
-    let done = ollama_resp.done.unwrap_or(false);
-    if done {
-        if let Some(ctx) = ollama_resp.context {
-            context = Some(format!("{:?}", ctx));
-        }
-        let model = ollama_resp.model.unwrap_or("Unknown".to_string());
-        let prompt_eval_count = ollama_resp.prompt_eval_count.unwrap_or(0);
-        let eval_count = ollama_resp.eval_count.unwrap_or(0);
-        let total_duration: f64 = ollama_resp.total_duration.unwrap_or(0) as f64 / 1000000000.0;
-        let msg = format!(
-            "Response generated from {}:{} -> [\"{}\",{},{},{}]",
-            conf.host, conf.port, model, prompt_eval_count, eval_count, total_duration
+fn finish_spinner_error(pb: ProgressBar, color: bool) {
+    if color {
+        pb.set_style(
+            ProgressStyle::with_template("{msg:.red} {spinner:.red}")
+                .unwrap()
+                .tick_strings(SPINNER_ERR),
         );
-        lib::log(lib::LogLevel::Debug, "ollama", &msg)?;
-        lib::fmt_print("\nDone", lib::ContentType::Info, conf);
-        if conf.verbose {
-            let x = format!("* Model: {}\n* Tokens in prompt: {}\n* Tokens in response: {}\n* Time taken: {:.3}s", model, prompt_eval_count, eval_count, total_duration);
-            lib::fmt_print(&x, lib::ContentType::Info, conf);
-        }
+    } else {
+        pb.set_style(
+            ProgressStyle::with_template("{msg} {spinner}")
+                .unwrap()
+                .tick_strings(SPINNER_ERR),
+        );
     }
-    Ok((context, response))
+    pb.finish_with_message("Error");
 }
 
 fn get_postdata(hm: HashMap<String, String>) -> String {

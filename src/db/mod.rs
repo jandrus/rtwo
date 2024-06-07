@@ -28,7 +28,7 @@ const DB_DELETE_STMT: &str = "DELETE FROM Conversations WHERE timestamp=(?1)";
 pub fn save_conversation(
     conversation: Vec<Chat>,
     context: Option<String>,
-    conf: &lib::RTwoConfig,
+    conf: &lib::Config,
 ) -> Result<()> {
     if conversation.is_empty() {
         return Ok(());
@@ -47,9 +47,9 @@ pub fn save_conversation(
     Ok(())
 }
 
-pub fn restore_conversation(conf: &lib::RTwoConfig) -> Result<(Option<String>, Vec<Chat>)> {
+pub fn restore_conversation(color: bool) -> Result<(Option<String>, Vec<Chat>)> {
     let (entries, conversations) = get_conversation_entries()?;
-    let idx = match conf.color {
+    let idx = match color {
         true => Select::with_theme(&ColorfulTheme::default())
             .with_prompt("Choose conversation to restore")
             .items(&conversations[..])
@@ -67,16 +67,16 @@ pub fn restore_conversation(conf: &lib::RTwoConfig) -> Result<(Option<String>, V
             get_time_from_ts(entries[idx].timestamp)?
         ),
         lib::ContentType::Info,
-        conf,
+        color,
     );
     for chat in &entries[idx].conversation {
         match chat.role.as_str() {
             "user" => {
                 let content = format!("\n{}\n", &chat.content);
-                lib::fmt_print(&content, lib::ContentType::Exit, conf)
+                lib::fmt_print(&content, lib::ContentType::Exit, color)
             }
-            "assistant" => lib::fmt_print(&chat.content, lib::ContentType::Answer, conf),
-            _ => lib::fmt_print(&chat.content, lib::ContentType::Info, conf),
+            "assistant" => lib::fmt_print(&chat.content, lib::ContentType::Answer, color),
+            _ => lib::fmt_print(&chat.content, lib::ContentType::Info, color),
         }
     }
     println!("\n");
@@ -86,9 +86,9 @@ pub fn restore_conversation(conf: &lib::RTwoConfig) -> Result<(Option<String>, V
     ))
 }
 
-pub fn delete_conversations(conf: &lib::RTwoConfig) -> Result<()> {
+pub fn delete_conversations(color: bool) -> Result<()> {
     let (entries, conversations) = get_conversation_entries()?;
-    let idxs = match conf.color {
+    let idxs = match color {
         true => MultiSelect::with_theme(&ColorfulTheme::default())
             .with_prompt("Choose conversations to delete (spacebar to select/deselect)")
             .items(&conversations[..])
@@ -106,12 +106,12 @@ pub fn delete_conversations(conf: &lib::RTwoConfig) -> Result<()> {
     lib::fmt_print(
         "DELETE (action is irreversible):",
         lib::ContentType::Error,
-        conf,
+        color,
     );
     for i in idxs.iter() {
-        lib::fmt_print(&conversations[*i], lib::ContentType::Info, conf);
+        lib::fmt_print(&conversations[*i], lib::ContentType::Info, color);
     }
-    let confirm = match conf.color {
+    let confirm = match color {
         true => Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt("Confirm delete conversations")
             .wait_for_newline(true)
@@ -130,16 +130,16 @@ pub fn delete_conversations(conf: &lib::RTwoConfig) -> Result<()> {
     for i in idxs.into_iter() {
         con.execute(DB_DELETE_STMT, [entries[i].timestamp])?;
     }
-    lib::fmt_print("Conversations DELETED", lib::ContentType::Exit, conf);
+    lib::fmt_print("Conversations DELETED", lib::ContentType::Exit, color);
     lib::log(lib::LogLevel::Info, "db", "Conversations DELETED").unwrap();
     Ok(())
 }
 
-pub fn list_conversations(conf: &lib::RTwoConfig) -> Result<()> {
+pub fn list_conversations(color: bool) -> Result<()> {
     let (_, conversations) = get_conversation_entries()?;
-    lib::fmt_print("Previous conversations:", lib::ContentType::Exit, conf);
+    lib::fmt_print("Previous conversations:", lib::ContentType::Exit, color);
     for conversation in conversations.iter() {
-        lib::fmt_print(conversation, lib::ContentType::Info, conf);
+        lib::fmt_print(conversation, lib::ContentType::Info, color);
     }
     Ok(())
 }
